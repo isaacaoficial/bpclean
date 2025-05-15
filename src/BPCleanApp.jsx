@@ -1,55 +1,123 @@
-import { useState } from "react";
+import React, { useState } from "react";
+import Papa from "papaparse";
 
-export default function BPCleanApp() {
-  const [file, setFile] = useState(null);
-  const [validatedData, setValidatedData] = useState([]);
-  const [errorsFound, setErrorsFound] = useState(false);
+function BPCleanApp() {
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  const handleFileUpload = (e) => {
-    const uploaded = e.target.files[0];
-    setFile(uploaded);
-    setValidatedData([
-      { cnpj: "12.345.678/0001-90", razao: "Empresa Alpha", status: "OK" },
-      { cnpj: "11.222.333/0001-00", razao: "Empresa Beta", status: "Erro - IE inválida" },
-      { cnpj: "09.876.543/0001-12", razao: "Empresa Gama", status: "Enriquecido" },
-    ]);
-    setErrorsFound(true);
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setLoading(true);
+    setResults([]);
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (parsed) => {
+        const enriched = [];
+
+        for (let row of parsed.data) {
+          const inputCNPJ = row.CNPJ?.replace(/\D/g, "");
+          const inputRS = row["Razão Social"]?.toUpperCase().trim() || "";
+          const inputIE = row["Inscrição Estadual"] || "";
+
+          let status = "";
+          let receita = {};
+
+          if (!inputCNPJ || inputCNPJ.length !== 14) {
+            status = "❌ CNPJ inválido";
+          } else {
+            try {
+              const res = await fetch(`/api/validateCNPJ?cnpj=${inputCNPJ}`);
+              receita = await res.json();
+
+              if (receita?.nome) {
+                const receitaRS = receita.nome.toUpperCase().trim();
+                status =
+                  receitaRS === inputRS ? "✔️ OK" : "⚠️ Nome divergente";
+              } else {
+                status = "❌ Não encontrado";
+              }
+            } catch {
+              status = "⚠️ Erro na consulta";
+            }
+            await new Promise((r) => setTimeout(r, 500));
+          }
+
+          enriched.push({
+            CNPJ: row.CNPJ,
+            "Razão Social (Planilha)": inputRS,
+            "Razão Social (ReceitaWS)": receita.nome || "",
+            "Nome Fantasia": receita.fantasia || "",
+            Situação: receita.situacao || "",
+            "Endereço": `${receita.logradouro || ""}, ${receita.numero || ""} ${receita.bairro || ""}`,
+            Município: receita.municipio || "",
+            UF: receita.uf || "",
+            CEP: receita.cep || "",
+            Telefone: receita.telefone || "",
+            Email: receita.email || "",
+            "Inscrição Estadual": `${inputIE} (não validada)`,
+            Status: status,
+          });
+        }
+
+        setResults(enriched);
+        setLoading(false);
+      },
+    });
   };
 
   const handleExport = () => {
-    alert("Exportação de base limpa simulada.");
+    if (results.length === 0) return alert("Nenhum dado para exportar.");
+    const csv = Papa.unparse(results);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute("download", "base_corrigida.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
-    <div style={{ padding: '2rem', fontFamily: 'Arial' }}>
+    <div style={{ padding: "2rem", fontFamily: "Arial, sans-serif" }}>
       <h1>BPClean - Saneamento de Dados de PJ</h1>
-      <input type="file" accept=".csv,.xlsx" onChange={handleFileUpload} />
-      {validatedData.length > 0 && (
-        <div style={{ marginTop: '2rem' }}>
+      <input type="file" accept=".csv" onChange={handleFileUpload} />
+      {loading && <p>🔄 Validando CNPJs, aguarde...</p>}
+
+      {results.length > 0 && (
+        <>
           <h2>Resultado da Validação</h2>
-          <table border="1" cellPadding="8">
+          <table border="1" cellPadding="6">
             <thead>
               <tr>
                 <th>CNPJ</th>
-                <th>Razão Social</th>
+                <th>Razão Social (Planilha)</th>
+                <th>Razão Social (Receita)</th>
+                <th>Situação</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {validatedData.map((item, idx) => (
-                <tr key={idx}>
-                  <td>{item.cnpj}</td>
-                  <td>{item.razao}</td>
-                  <td>{item.status}</td>
+              {results.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.CNPJ}</td>
+                  <td>{r["Razão Social (Planilha)"]}</td>
+                  <td>{r["Razão Social (ReceitaWS)"]}</td>
+                  <td>{r.Situação}</td>
+                  <td>{r.Status}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <button style={{ marginTop: '1rem' }} onClick={handleExport} disabled={!errorsFound}>
-            Exportar Base Corrigida
-          </button>
-        </div>
+          <br />
+          <button onClick={handleExport}>⬇️ Exportar Base Corrigida (.csv)</button>
+        </>
       )}
     </div>
   );
 }
+
+export default BPCleanApp;
