@@ -16,33 +16,66 @@ export default function BPCleanApp() {
       header: true,
       skipEmptyLines: true,
       complete: async (parsed) => {
-        const cnpjs = parsed.data.map((row) => row.CNPJ);
         const enriched = [];
 
-        for (let cnpj of cnpjs) {
-          const cleanCNPJ = cnpj.replace(/\D/g, "");
-          try {
-            const res = await fetch(`/api/validateCNPJ?cnpj=${cleanCNPJ}`);
-            const data = await res.json();
-            enriched.push(data);
-            setResults([...enriched]); // Atualiza em tempo real
-            await new Promise((r) => setTimeout(r, 500)); // Evita bloqueio da API
-          } catch (err) {
-            enriched.push({ cnpj: cleanCNPJ, error: "Erro ao consultar" });
+        for (let row of parsed.data) {
+          const inputCNPJ = row.CNPJ?.replace(/\D/g, "");
+          const inputRS = row["Razão Social"]?.toUpperCase().trim() || "";
+          const inputIE = row["Inscrição Estadual"] || "";
+
+          let status = "";
+          let receita = {};
+
+          if (!inputCNPJ || inputCNPJ.length !== 14) {
+            status = "❌ CNPJ inválido";
+          } else {
+            try {
+              const res = await fetch(`/api/validateCNPJ?cnpj=${inputCNPJ}`);
+              receita = await res.json();
+
+              if (receita?.nome) {
+                const receitaRS = receita.nome.toUpperCase().trim();
+                status =
+                  receitaRS === inputRS ? "✔️ OK" : "⚠️ Nome divergente";
+              } else {
+                status = "❌ Não encontrado";
+              }
+            } catch {
+              status = "⚠️ Erro na consulta";
+            }
+            await new Promise((r) => setTimeout(r, 500)); // Respeita limite da ReceitaWS
           }
+
+          enriched.push({
+            CNPJ: row.CNPJ,
+            "Razão Social (Planilha)": inputRS,
+            "Razão Social (ReceitaWS)": receita.nome || "",
+            "Nome Fantasia": receita.fantasia || "",
+            Situação: receita.situacao || "",
+            "Endereço": `${receita.logradouro || ""}, ${receita.numero || ""} ${receita.bairro || ""}`,
+            Município: receita.municipio || "",
+            UF: receita.uf || "",
+            CEP: receita.cep || "",
+            Telefone: receita.telefone || "",
+            Email: receita.email || "",
+            "Inscrição Estadual": `${inputIE} (não validada)`,
+            Status: status,
+          });
         }
 
+        setResults(enriched);
         setLoading(false);
       },
     });
   };
 
   const handleExport = () => {
+    if (results.length === 0) return alert("Nenhum dado para exportar.");
     const csv = Papa.unparse(results);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.setAttribute("download", "resultado_saneado.csv");
+    link.setAttribute("download", "base_corrigida.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -53,32 +86,36 @@ export default function BPCleanApp() {
       <h1>BPClean - Saneamento de Dados de PJ</h1>
       <input type="file" accept=".csv" onChange={handleFileUpload} />
       {loading && <p>🔄 Validando CNPJs, aguarde...</p>}
+
       {results.length > 0 && (
         <>
-          <h2>Resultado</h2>
-          <table border="1" cellPadding="8">
+          <h2>Resultado da Validação</h2>
+          <table border="1" cellPadding="6">
             <thead>
               <tr>
                 <th>CNPJ</th>
-                <th>Nome</th>
-                <th>Fantasia</th>
+                <th>Razão Social (Planilha)</th>
+                <th>Razão Social (Receita)</th>
                 <th>Situação</th>
-                <th>Município</th>
-                <th>UF</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
               {results.map((r, i) => (
                 <tr key={i}>
-                  <td>{r.cnpj}</td>
-                  <td>{r.nome || r.error}</td>
-                  <td>{r.fantasia}</td>
-                  <td>{r.situacao}</td>
-                  <td>{r.municipio}</td>
-                  <td>{r.uf}</td>
+                  <td>{r.CNPJ}</td>
+                  <td>{r["Razão Social (Planilha)"]}</td>
+                  <td>{r["Razão Social (ReceitaWS)"]}</td>
+                  <td>{r.Situação}</td>
+                  <td>{r.Status}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <br />
-          <
+          <button onClick={handleExport}>⬇️ Exportar Base Corrigida (.csv)</button>
+        </>
+      )}
+    </div>
+  );
+}
